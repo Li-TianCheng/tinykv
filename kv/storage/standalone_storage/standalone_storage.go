@@ -13,14 +13,14 @@ import (
 // communicate with other nodes and all data is stored locally.
 type StandAloneStorage struct {
 	// Your Data Here (1).
-	db *badger.DB
+	db   *badger.DB
 	conf *config.Config
 }
 
 func NewStandAloneStorage(conf *config.Config) *StandAloneStorage {
 	// Your Code Here (1).
 	storage := StandAloneStorage{
-		db: nil,
+		db:   nil,
 		conf: conf,
 	}
 	return &storage
@@ -28,15 +28,8 @@ func NewStandAloneStorage(conf *config.Config) *StandAloneStorage {
 
 func (s *StandAloneStorage) Start() error {
 	// Your Code Here (1).
-	var err error
-	opts := badger.DefaultOptions
-	opts.Dir = s.conf.DBPath
-	opts.ValueDir = s.conf.DBPath
-	s.db, err = badger.Open(opts)
-	if err != nil {
-		s.db.Close()
-	}
-	return err
+	s.db = engine_util.CreateDB(s.conf.DBPath, false)
+	return nil
 }
 
 func (s *StandAloneStorage) Stop() error {

@@ -30,15 +30,15 @@ func (server *Server) RawGet(_ context.Context, req *kvrpcpb.RawGetRequest) (*kv
 func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kvrpcpb.RawPutResponse, error) {
 	// Your Code Here (1).
 	// Hint: Consider using Storage.Modify to store data to be modified
-	p := storage.Put {
-		Key: req.Key,
+	p := storage.Put{
+		Key:   req.Key,
 		Value: req.Value,
-		Cf: req.Cf,
+		Cf:    req.Cf,
 	}
 	m := storage.Modify{
 		Data: p,
 	}
-	batch := [] storage.Modify{m}
+	batch := []storage.Modify{m}
 	err := server.storage.Write(nil, batch)
 	resp := new(kvrpcpb.RawPutResponse)
 	if err != nil {
@@ -51,14 +51,14 @@ func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kv
 func (server *Server) RawDelete(_ context.Context, req *kvrpcpb.RawDeleteRequest) (*kvrpcpb.RawDeleteResponse, error) {
 	// Your Code Here (1).
 	// Hint: Consider using Storage.Modify to store data to be deleted
-	p := storage.Delete {
+	p := storage.Delete{
 		Key: req.Key,
-		Cf: req.Cf,
+		Cf:  req.Cf,
 	}
 	m := storage.Modify{
 		Data: p,
 	}
-	err := server.storage.Write(nil, [] storage.Modify{m})
+	err := server.storage.Write(nil, []storage.Modify{m})
 	resp := new(kvrpcpb.RawDeleteResponse)
 	if err != nil {
 		resp.Error = err.Error()
@@ -86,8 +86,8 @@ func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*
 		if err != nil {
 			continue
 		}
-		p := kvrpcpb.KvPair {
-			Key: item.Key(),
+		p := kvrpcpb.KvPair{
+			Key:   item.Key(),
 			Value: val,
 		}
 		resp.Kvs = append(resp.Kvs, &p)

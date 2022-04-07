@@ -13,7 +13,7 @@ type StandAloneStorageReader struct {
 }
 
 func NewStandAloneStorageReader(s *StandAloneStorage, ctx *kvrpcpb.Context) (*StandAloneStorageReader, error) {
-	r := StandAloneStorageReader {
+	r := StandAloneStorageReader{
 		txn: s.db.NewTransaction(true),
 		ctx: ctx,
 	}
