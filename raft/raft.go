@@ -194,6 +194,23 @@ func newRaft(c *Config) *Raft {
 	return raft
 }
 
+func (r *Raft) SoftState() *SoftState {
+	s := &SoftState{
+		Lead:      r.Lead,
+		RaftState: r.State,
+	}
+	return s
+}
+
+func (r *Raft) HardState() pb.HardState {
+	s := pb.HardState{
+		Term:   r.Term,
+		Vote:   r.Vote,
+		Commit: r.RaftLog.committed,
+	}
+	return s
+}
+
 func (r *Raft) initHandlers() {
 	r.handlerMap[pb.MessageType_MsgHup] = r.handleMsgUp
 	r.handlerMap[pb.MessageType_MsgBeat] = r.handleMsgBeat
