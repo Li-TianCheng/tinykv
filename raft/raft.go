@@ -171,12 +171,18 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
+	hardState, confState, _ := c.Storage.InitialState()
+	if c.peers == nil {
+		c.peers = confState.Nodes
+	}
 	prs := make(map[uint64]*Progress)
 	for _, p := range c.peers {
 		prs[p] = new(Progress)
 	}
 	raft := &Raft{
 		id:               c.ID,
+		Term:             hardState.Term,
+		Vote:             hardState.Vote,
 		RaftLog:          newLog(c.Storage),
 		Prs:              prs,
 		State:            StateFollower,
@@ -221,7 +227,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
 	index := r.Prs[to].Next - 1
 	logTerm, err := r.RaftLog.Term(index)
-	if err != nil || index <= r.RaftLog.firstIndex {
+	if err != nil || index+1 < r.RaftLog.firstIndex {
 		r.sendSnapshot(to)
 		return true
 	}
@@ -244,6 +250,18 @@ func (r *Raft) sendAppend(to uint64) bool {
 }
 
 func (r *Raft) sendSnapshot(to uint64) bool {
+	snapshot, err := r.RaftLog.storage.Snapshot()
+	if err != nil {
+		return false
+	}
+	msg := pb.Message{
+		MsgType:  pb.MessageType_MsgSnapshot,
+		Term:     r.Term,
+		Snapshot: &snapshot,
+		From:     r.id,
+		To:       to,
+	}
+	r.sendMsg(msg)
 	return true
 }
 
@@ -348,13 +366,17 @@ func (r *Raft) becomeLeader() {
 			p.Next = p.Match + 1
 		}
 	}
+	r.Step(pb.Message{
+		MsgType: pb.MessageType_MsgPropose,
+		Entries: []*pb.Entry{new(pb.Entry)},
+	})
 }
 
 // Step the entrance of handle message, see `MessageType`
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
-	if m.Term >= r.Term || IsLocalMsg(m.MsgType) {
+	if m.Term >= r.Term || IsLocalMsg(m.MsgType) || m.MsgType == pb.MessageType_MsgPropose {
 		if m.Term > r.Term {
 			r.becomeFollower(m.Term, m.From)
 		}
@@ -388,14 +410,26 @@ func (r *Raft) handleMsgPropose(m pb.Message) {
 			MsgType: pb.MessageType_MsgPropose,
 			Entries: m.Entries,
 			From:    r.id,
-			To:      m.To,
+			To:      r.Lead,
 		}
 		r.sendMsg(msg)
 	case StateCandidate:
 	case StateLeader:
-		for _, entry := range m.Entries {
+		lastIndex := r.RaftLog.LastIndex()
+		for i, entry := range m.Entries {
+			entry.Term = r.Term
+			entry.Index = lastIndex + uint64(i) + 1
 			r.RaftLog.entries = append(r.RaftLog.entries, *entry)
 		}
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Term:    r.Term,
+			Index:   r.RaftLog.LastIndex(),
+			Reject:  false,
+			From:    r.id,
+			To:      r.id,
+		}
+		r.Step(msg)
 		r.broadcast(r.sendAppend)
 	}
 }
@@ -410,40 +444,71 @@ func (r *Raft) handleMsgAppendResponse(m pb.Message) {
 	case StateCandidate:
 		r.becomeFollower(m.Term, m.From)
 	case StateLeader:
-		// TODO
+		if !m.Reject {
+			r.Prs[m.From].Match = max(r.Prs[m.From].Match, m.Index)
+			r.Prs[m.From].Next = r.Prs[m.From].Match + 1
+			matchTerm, _ := r.RaftLog.Term(m.Index)
+			if m.Index > r.RaftLog.committed && matchTerm == r.Term {
+				count := 0
+				for _, p := range r.Prs {
+					if p.Match >= m.Index {
+						count++
+					}
+					if count > len(r.Prs)/2 {
+						r.RaftLog.committed = m.Index
+						r.broadcast(r.sendAppend)
+						break
+					}
+				}
+			}
+		} else {
+			r.Prs[m.From].Next = min(m.Index+1, r.Prs[m.From].Next-1)
+			r.sendAppend(m.From)
+		}
 	}
 }
 
 func (r *Raft) handleMsgRequestVote(m pb.Message) {
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgRequestVoteResponse,
+		Term:    r.Term,
+		Reject:  true,
+		From:    r.id,
+		To:      m.From,
+	}
 	switch r.State {
 	case StateLeader:
 	default:
-		msg := pb.Message{
-			MsgType: pb.MessageType_MsgRequestVoteResponse,
-			Term:    r.Term,
-			From:    r.id,
-			To:      m.From,
-		}
+		r.Lead = None
 		t, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
-		if m.LogTerm >= t && m.Index >= r.RaftLog.LastIndex() && (r.Vote == None || r.Vote == m.From) {
-			msg.Reject = false
-			r.Vote = m.From
-		} else {
-			msg.Reject = true
+		if r.Vote == None || r.Vote == m.From {
+			if m.LogTerm > t || m.LogTerm == t && m.Index >= r.RaftLog.LastIndex() {
+				msg.Reject = false
+				r.Vote = m.From
+			}
 		}
-		r.sendMsg(msg)
 	}
+	r.sendMsg(msg)
 }
 
 func (r *Raft) handleMsgRequestVoteResponse(m pb.Message) {
 	switch r.State {
 	case StateFollower:
 	case StateCandidate:
-		if !m.Reject {
-			r.votes[m.From] = true
-			if len(r.votes) > len(r.Prs)/2 {
-				r.becomeLeader()
-				r.broadcast(r.sendHeartbeat)
+		r.votes[m.From] = !m.Reject
+		agree := 0
+		disagree := 0
+		for _, v := range r.votes {
+			if v {
+				agree++
+				if agree > len(r.Prs)/2 {
+					r.becomeLeader()
+				}
+			} else {
+				disagree++
+				if disagree > len(r.Prs)/2 {
+					r.becomeFollower(r.Term, None)
+				}
 			}
 		}
 	case StateLeader:
@@ -463,6 +528,9 @@ func (r *Raft) handleMsgHeartbeatResponse(m pb.Message) {
 	case StateFollower:
 	case StateCandidate:
 	case StateLeader:
+		if r.Prs[m.From].Match < r.RaftLog.LastIndex() {
+			r.sendAppend(m.From)
+		}
 	}
 }
 
@@ -487,7 +555,40 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
-		// TODO
+		r.Lead = m.From
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Term:    r.Term,
+			From:    r.id,
+			To:      m.From,
+		}
+		prevLogTerm, err := r.RaftLog.Term(m.Index)
+		if err != nil || prevLogTerm != m.LogTerm {
+			msg.Reject = true
+			msg.Index = r.RaftLog.LastIndex()
+		} else {
+			msg.Reject = false
+			lastIndex := r.RaftLog.LastIndex()
+			for _, entry := range m.Entries {
+				if entry.Index <= lastIndex {
+					term, _ := r.RaftLog.Term(entry.Index)
+					if term != entry.Term {
+						r.RaftLog.entries = r.RaftLog.entries[:entry.Index-r.RaftLog.firstIndex]
+						r.RaftLog.entries = append(r.RaftLog.entries, *entry)
+						lastIndex = r.RaftLog.LastIndex()
+						r.RaftLog.stabled = m.Index
+					}
+				} else {
+					r.RaftLog.entries = append(r.RaftLog.entries, *entry)
+				}
+			}
+			if m.Commit > r.RaftLog.committed {
+				committed := min(m.Commit, m.Index+uint64(len(m.Entries)))
+				r.RaftLog.committed = min(committed, r.RaftLog.LastIndex())
+			}
+			msg.Index = m.Index + uint64(len(m.Entries))
+		}
+		r.sendMsg(msg)
 	case StateCandidate:
 		r.becomeFollower(m.Term, m.From)
 	case StateLeader:
@@ -499,6 +600,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
+		r.Lead = m.From
 		r.RaftLog.committed = max(r.RaftLog.committed, m.Commit)
 		r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
 		msg := pb.Message{
@@ -519,7 +621,9 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
 	switch r.State {
 	case StateFollower:
+
 	case StateCandidate:
+		r.becomeFollower(m.Term, m.From)
 	case StateLeader:
 	}
 }

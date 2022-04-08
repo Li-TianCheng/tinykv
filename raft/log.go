@@ -85,6 +85,9 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
+	if l.stabled-l.firstIndex+1 > uint64(len(l.entries)) || l.stabled-l.firstIndex+1 < 0 {
+		return []pb.Entry{}
+	}
 	return l.entries[l.stabled-l.firstIndex+1:]
 }
 
@@ -107,6 +110,9 @@ func (l *RaftLog) LastIndex() uint64 {
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
 	if i >= l.firstIndex {
+		if i-l.firstIndex >= uint64(len(l.entries)) {
+			return 0, ErrUnavailable
+		}
 		return l.entries[i-l.firstIndex].Term, nil
 	} else {
 		return l.storage.Term(i)
