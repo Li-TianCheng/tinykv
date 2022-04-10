@@ -63,7 +63,6 @@ func (d *peerMsgHandler) ApplyEntries(entries []pb.Entry) {
 		return
 	}
 	writeBatch := new(engine_util.WriteBatch)
-	proposalEntries := entries
 	for _, entry := range entries {
 		if d.stopped {
 			return
@@ -73,28 +72,24 @@ func (d *peerMsgHandler) ApplyEntries(entries []pb.Entry) {
 		if err != nil {
 			panic(err)
 		}
-		for i, req := range msg.Requests {
-			switch req.CmdType {
-			case raft_cmdpb.CmdType_Invalid:
-			case raft_cmdpb.CmdType_Get:
-				d.peerStorage.applyState.AppliedIndex = entries[len(entries)-1].Index
-				writeBatch.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
-				d.peerStorage.Engines.WriteKV(writeBatch)
-				writeBatch = new(engine_util.WriteBatch)
-				d.proposalResponse(entries)
-				proposalEntries = entries[i+1:]
-			case raft_cmdpb.CmdType_Put:
-				writeBatch.SetCF(req.Put.Cf, req.Put.Key, req.Put.Value)
-			case raft_cmdpb.CmdType_Delete:
-				writeBatch.DeleteCF(req.Delete.Cf, req.Delete.Key)
-			case raft_cmdpb.CmdType_Snap:
-			}
+		if len(msg.Requests) == 0 {
+			continue
+		}
+		req := msg.Requests[0]
+		switch req.CmdType {
+		case raft_cmdpb.CmdType_Invalid:
+		case raft_cmdpb.CmdType_Get:
+		case raft_cmdpb.CmdType_Put:
+			writeBatch.SetCF(req.Put.Cf, req.Put.Key, req.Put.Value)
+		case raft_cmdpb.CmdType_Delete:
+			writeBatch.DeleteCF(req.Delete.Cf, req.Delete.Key)
+		case raft_cmdpb.CmdType_Snap:
 		}
 	}
 	d.peerStorage.applyState.AppliedIndex = entries[len(entries)-1].Index
 	writeBatch.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
 	d.peerStorage.Engines.WriteKV(writeBatch)
-	d.proposalResponse(proposalEntries)
+	d.proposalResponse(entries)
 	return
 }
 
@@ -125,32 +120,31 @@ func (d *peerMsgHandler) proposalResponse(entries []pb.Entry) {
 			if err != nil {
 				panic(err)
 			}
-			for _, req := range msg.Requests {
-				switch req.CmdType {
-				case raft_cmdpb.CmdType_Invalid:
-				case raft_cmdpb.CmdType_Get:
-					value, _ := engine_util.GetCF(d.peerStorage.Engines.Kv, req.Get.Cf, req.Get.Key)
-					resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
-						CmdType: raft_cmdpb.CmdType_Get,
-						Get:     &raft_cmdpb.GetResponse{Value: value},
-					})
-				case raft_cmdpb.CmdType_Put:
-					resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
-						CmdType: raft_cmdpb.CmdType_Put,
-						Put:     &raft_cmdpb.PutResponse{},
-					})
-				case raft_cmdpb.CmdType_Delete:
-					resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
-						CmdType: raft_cmdpb.CmdType_Delete,
-						Delete:  &raft_cmdpb.DeleteResponse{},
-					})
-				case raft_cmdpb.CmdType_Snap:
-					resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
-						CmdType: raft_cmdpb.CmdType_Snap,
-						Snap:    &raft_cmdpb.SnapResponse{Region: d.Region()},
-					})
-					p.cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
-				}
+			req := msg.Requests[0]
+			switch req.CmdType {
+			case raft_cmdpb.CmdType_Invalid:
+			case raft_cmdpb.CmdType_Get:
+				value, _ := engine_util.GetCF(d.peerStorage.Engines.Kv, req.Get.Cf, req.Get.Key)
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
+					CmdType: raft_cmdpb.CmdType_Get,
+					Get:     &raft_cmdpb.GetResponse{Value: value},
+				})
+			case raft_cmdpb.CmdType_Put:
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
+					CmdType: raft_cmdpb.CmdType_Put,
+					Put:     &raft_cmdpb.PutResponse{},
+				})
+			case raft_cmdpb.CmdType_Delete:
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
+					CmdType: raft_cmdpb.CmdType_Delete,
+					Delete:  &raft_cmdpb.DeleteResponse{},
+				})
+			case raft_cmdpb.CmdType_Snap:
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
+					CmdType: raft_cmdpb.CmdType_Snap,
+					Snap:    &raft_cmdpb.SnapResponse{Region: d.Region()},
+				})
+				p.cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
 			}
 			p.cb.Done(resp)
 			d.proposals = d.proposals[1:]
@@ -229,12 +223,13 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
-	for _, req := range msg.Requests {
-		_, err := d.getRequestKey(req)
-		if err != nil {
-			cb.Done(ErrResp(err))
-			return
-		}
+	if len(msg.Requests) == 0 {
+		return
+	}
+	_, err = d.getRequestKey(msg.Requests[0])
+	if err != nil {
+		cb.Done(ErrResp(err))
+		return
 	}
 	data, _ := msg.Marshal()
 	d.RaftGroup.Propose(data)
