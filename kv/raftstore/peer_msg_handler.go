@@ -49,8 +49,11 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	if d.RaftGroup.HasReady() {
 		rd := d.RaftGroup.Ready()
 		d.peerStorage.SaveReadyState(&rd)
+		d.peer.applyWorker.Add(applyArg{
+			d:       d,
+			entries: rd.CommittedEntries,
+		})
 		d.Send(d.ctx.trans, rd.Messages)
-		d.ApplyEntries(rd.CommittedEntries)
 		d.RaftGroup.Advance(rd)
 	}
 }
@@ -97,6 +100,7 @@ func (d *peerMsgHandler) ApplyEntries(entries []pb.Entry) {
 
 func (d *peerMsgHandler) proposalResponse(entries []pb.Entry) {
 	for _, e := range entries {
+		d.proposalsMutex.Lock()
 		for len(d.proposals) > 0 {
 			p := d.proposals[0]
 			if e.Term < p.term {
@@ -128,22 +132,22 @@ func (d *peerMsgHandler) proposalResponse(entries []pb.Entry) {
 					value, _ := engine_util.GetCF(d.peerStorage.Engines.Kv, req.Get.Cf, req.Get.Key)
 					resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
 						CmdType: raft_cmdpb.CmdType_Get,
-						Get: &raft_cmdpb.GetResponse{Value: value},
+						Get:     &raft_cmdpb.GetResponse{Value: value},
 					})
 				case raft_cmdpb.CmdType_Put:
 					resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
 						CmdType: raft_cmdpb.CmdType_Put,
-						Put: &raft_cmdpb.PutResponse{},
+						Put:     &raft_cmdpb.PutResponse{},
 					})
 				case raft_cmdpb.CmdType_Delete:
 					resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
 						CmdType: raft_cmdpb.CmdType_Delete,
-						Delete: &raft_cmdpb.DeleteResponse{},
+						Delete:  &raft_cmdpb.DeleteResponse{},
 					})
 				case raft_cmdpb.CmdType_Snap:
 					resp.Responses = append(resp.Responses, &raft_cmdpb.Response{
 						CmdType: raft_cmdpb.CmdType_Snap,
-						Snap: &raft_cmdpb.SnapResponse{Region: d.Region()},
+						Snap:    &raft_cmdpb.SnapResponse{Region: d.Region()},
 					})
 					p.cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
 				}
@@ -152,6 +156,7 @@ func (d *peerMsgHandler) proposalResponse(entries []pb.Entry) {
 			d.proposals = d.proposals[1:]
 			break
 		}
+		d.proposalsMutex.Unlock()
 	}
 }
 
@@ -233,11 +238,13 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	}
 	data, _ := msg.Marshal()
 	d.RaftGroup.Propose(data)
+	d.peer.proposalsMutex.Lock()
 	d.proposals = append(d.proposals, &proposal{
-		index: d.nextProposalIndex()-1,
-		term: d.Term(),
-		cb: cb,
+		index: d.nextProposalIndex() - 1,
+		term:  d.Term(),
+		cb:    cb,
 	})
+	d.peer.proposalsMutex.Unlock()
 }
 
 func (d *peerMsgHandler) getRequestKey(req *raft_cmdpb.Request) ([]byte, error) {

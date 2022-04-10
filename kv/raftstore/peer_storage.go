@@ -331,7 +331,7 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	if err != nil {
 		return err
 	}
-	for i := entries[len(entries)-1].Index+1; i <= lastIndex; i++ {
+	for i := entries[len(entries)-1].Index + 1; i <= lastIndex; i++ {
 		raftWB.DeleteMeta(meta.RaftLogKey(ps.region.Id, i))
 	}
 	return nil
