@@ -228,10 +228,12 @@ func (p *peer) Destroy(engine *engine_util.Engines, keepData bool) error {
 		p.peerStorage.ClearData()
 	}
 
+	p.proposalsMutex.Lock()
 	for _, proposal := range p.proposals {
 		NotifyReqRegionRemoved(region.Id, proposal.cb)
 	}
 	p.proposals = nil
+	p.proposalsMutex.Unlock()
 	if p.applyWorker != nil {
 		p.applyWorker.Stop()
 	}

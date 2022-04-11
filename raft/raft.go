@@ -245,8 +245,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 	index := r.Prs[to].Next - 1
 	logTerm, err := r.RaftLog.Term(index)
 	if err != nil || index+1 < r.RaftLog.firstIndex {
-		r.sendSnapshot(to)
-		return true
+		return r.sendSnapshot(to)
 	}
 	var entries []*pb.Entry
 	for i := index + 1; i <= r.RaftLog.LastIndex(); i++ {
@@ -267,9 +266,15 @@ func (r *Raft) sendAppend(to uint64) bool {
 }
 
 func (r *Raft) sendSnapshot(to uint64) bool {
-	snapshot, err := r.RaftLog.storage.Snapshot()
-	if err != nil {
-		return false
+	var snapshot pb.Snapshot
+	var err error
+	if IsEmptySnap(r.RaftLog.pendingSnapshot) {
+		snapshot, err = r.RaftLog.storage.Snapshot()
+		if err != nil {
+			return false
+		}
+	} else {
+		snapshot = *r.RaftLog.pendingSnapshot
 	}
 	msg := pb.Message{
 		MsgType:  pb.MessageType_MsgSnapshot,
@@ -638,7 +643,32 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
 	switch r.State {
 	case StateFollower:
-
+		r.Lead = m.From
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Term:    r.Term,
+			From:    r.id,
+			To:      m.From,
+		}
+		snap := m.Snapshot
+		if snap.Metadata.Index < r.RaftLog.committed {
+			msg.Reject = true
+			msg.Index = r.RaftLog.LastIndex()
+		} else {
+			r.RaftLog.firstIndex, _ = r.RaftLog.storage.FirstIndex()
+			r.RaftLog.applied = snap.Metadata.Index
+			r.RaftLog.committed = snap.Metadata.Index
+			r.RaftLog.stabled = snap.Metadata.Index
+			r.RaftLog.maybeCompact()
+			r.RaftLog.pendingSnapshot = snap
+			msg.Reject = false
+			msg.Index = snap.Metadata.Index
+			r.Prs = make(map[uint64]*Progress)
+			for _, peer := range snap.Metadata.ConfState.Nodes {
+				r.Prs[peer] = &Progress{}
+			}
+		}
+		r.sendMsg(msg)
 	case StateCandidate:
 		r.becomeFollower(m.Term, m.From)
 	case StateLeader:
