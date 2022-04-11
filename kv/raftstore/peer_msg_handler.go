@@ -95,7 +95,7 @@ func (d *peerMsgHandler) ApplyEntries(entries []pb.Entry) {
 			d.peerStorage.applyState.AppliedIndex = entry.Index
 			writeBatch.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
 			writeBatch.MustWriteToDB(d.peerStorage.Engines.Kv)
-			d.proposalResponse(entries[len(entries)-len(remainEntries):i+1])
+			d.proposalResponse(entries[len(entries)-len(remainEntries) : i+1])
 			writeBatch = new(engine_util.WriteBatch)
 			remainEntries = entries[i+1:]
 		case raft_cmdpb.CmdType_Put:
@@ -117,7 +117,7 @@ func (d *peerMsgHandler) ApplyEntries(entries []pb.Entry) {
 
 func (d *peerMsgHandler) applyAdminRequest(msg *raft_cmdpb.RaftCmdRequest, wb *engine_util.WriteBatch) {
 	req := msg.AdminRequest
-	switch req.CmdType{
+	switch req.CmdType {
 	case raft_cmdpb.AdminCmdType_InvalidAdmin:
 	case raft_cmdpb.AdminCmdType_ChangePeer:
 	case raft_cmdpb.AdminCmdType_CompactLog:
@@ -296,7 +296,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 
 func (d *peerMsgHandler) proposeAdminRequest(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
 	req := msg.AdminRequest
-	switch req.CmdType{
+	switch req.CmdType {
 	case raft_cmdpb.AdminCmdType_InvalidAdmin:
 	case raft_cmdpb.AdminCmdType_ChangePeer:
 	case raft_cmdpb.AdminCmdType_CompactLog:

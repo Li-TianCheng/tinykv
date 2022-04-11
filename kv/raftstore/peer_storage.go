@@ -350,8 +350,6 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
 
-
-
 	if ps.isInitialized() {
 		if err := ps.clearMeta(kvWB, raftWB); err != nil {
 			return nil, err
