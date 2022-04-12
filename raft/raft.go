@@ -17,6 +17,7 @@ package raft
 import (
 	"errors"
 	"math/rand"
+	"sort"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -378,6 +379,7 @@ func (r *Raft) becomeLeader() {
 	r.Vote = None
 	r.votes = make(map[uint64]bool)
 	r.heartbeatElapsed = 0
+	r.leadTransferee = 0
 	r.electionElapsed = 0 - rand.Intn(r.electionTimeout)
 	for t, p := range r.Prs {
 		if t != r.id {
@@ -398,11 +400,15 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
-	if m.Term >= r.Term || IsLocalMsg(m.MsgType) || m.MsgType == pb.MessageType_MsgPropose {
-		if m.Term > r.Term {
-			r.becomeFollower(m.Term, m.From)
+	if _, ok := r.Prs[r.id]; ok {
+		if m.Term >= r.Term || IsLocalMsg(m.MsgType) ||
+			m.MsgType == pb.MessageType_MsgPropose ||
+			m.MsgType == pb.MessageType_MsgTransferLeader {
+			if m.Term > r.Term {
+				r.becomeFollower(m.Term, m.From)
+			}
+			r.handlerMap[m.MsgType](m)
 		}
-		r.handlerMap[m.MsgType](m)
 	}
 	return nil
 }
@@ -469,6 +475,9 @@ func (r *Raft) handleMsgAppendResponse(m pb.Message) {
 		if !m.Reject {
 			r.Prs[m.From].Match = max(r.Prs[m.From].Match, m.Index)
 			r.Prs[m.From].Next = r.Prs[m.From].Match + 1
+			if m.From == r.leadTransferee {
+				r.Step(pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: m.From})
+			}
 			matchTerm, _ := r.RaftLog.Term(m.Index)
 			if m.Index > r.RaftLog.committed && matchTerm == r.Term {
 				count := 0
@@ -559,14 +568,40 @@ func (r *Raft) handleMsgHeartbeatResponse(m pb.Message) {
 func (r *Raft) handleMsgTransferLeader(m pb.Message) {
 	switch r.State {
 	case StateFollower:
+		if r.Lead != None {
+			msg := pb.Message{
+				MsgType: pb.MessageType_MsgTransferLeader,
+				From: m.From,
+				To: r.Lead,
+			}
+			r.sendMsg(msg)
+		}
 	case StateCandidate:
 	case StateLeader:
+		if _, ok := r.Prs[m.From]; !ok {
+			return
+		}
+		r.leadTransferee = m.From
+		if r.Prs[m.From].Match == r.RaftLog.LastIndex() {
+			msg := pb.Message{
+				MsgType: pb.MessageType_MsgTimeoutNow,
+				Term:    r.Term,
+				From: r.id,
+				To: m.From,
+			}
+			r.sendMsg(msg)
+			r.leadTransferee = None
+		} else {
+			r.sendAppend(m.From)
+		}
 	}
 }
 
 func (r *Raft) handleMsgTimeoutNow(m pb.Message) {
 	switch r.State {
 	case StateFollower:
+		r.becomeCandidate()
+		r.broadcast(r.sendRequestVote)
 	case StateCandidate:
 	case StateLeader:
 	}
@@ -678,9 +713,31 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 // addNode add a new node to raft group
 func (r *Raft) addNode(id uint64) {
 	// Your Code Here (3A).
+	if _, ok := r.Prs[id]; !ok {
+		r.Prs[id] = &Progress{
+			Match: 0,
+			Next: r.RaftLog.LastIndex(),
+		}
+	}
 }
 
 // removeNode remove a node from raft group
 func (r *Raft) removeNode(id uint64) {
 	// Your Code Here (3A).
+	delete(r.Prs, id)
+	if len(r.Prs) == 0 {
+		return
+	}
+	match := make(uint64Slice, len(r.Prs))
+	i := 0
+	for _, prs := range r.Prs {
+		match[i] = prs.Match
+		i++
+	}
+	sort.Sort(match)
+	idx := match[(len(r.Prs)-1)/2]
+	matchTerm, _ := r.RaftLog.Term(idx)
+	if idx > r.RaftLog.committed && matchTerm == r.Term {
+		r.RaftLog.committed = idx
+	}
 }
