@@ -2,7 +2,6 @@ package raftstore
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/pingcap-incubator/tinykv/kv/config"
@@ -110,9 +109,6 @@ type peer struct {
 	// It's updated everytime the split checker scan the data
 	// (Used in 3B split)
 	ApproximateSize *uint64
-
-	applyWorker    *applyWorker
-	proposalsMutex sync.Mutex
 }
 
 func NewPeer(storeId uint64, cfg *config.Config, engines *engine_util.Engines, region *metapb.Region, regionSched chan<- worker.Task,
@@ -159,8 +155,6 @@ func NewPeer(storeId uint64, cfg *config.Config, engines *engine_util.Engines, r
 			return nil, err
 		}
 	}
-	p.applyWorker = NewApplyWorker()
-	p.applyWorker.run()
 	return p, nil
 }
 
@@ -228,15 +222,10 @@ func (p *peer) Destroy(engine *engine_util.Engines, keepData bool) error {
 		p.peerStorage.ClearData()
 	}
 
-	p.proposalsMutex.Lock()
 	for _, proposal := range p.proposals {
 		NotifyReqRegionRemoved(region.Id, proposal.cb)
 	}
 	p.proposals = nil
-	p.proposalsMutex.Unlock()
-	if p.applyWorker != nil {
-		p.applyWorker.Stop()
-	}
 	log.Infof("%v destroy itself, takes %v", p.Tag, time.Now().Sub(start))
 	return nil
 }

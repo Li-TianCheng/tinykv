@@ -10,8 +10,8 @@ import (
 // Invariant: either the scanner is finished and cannot be used, or it is ready to return a value immediately.
 type Scanner struct {
 	// Your Data Here (4C).
-	txn  *MvccTxn
-	iter engine_util.DBIterator
+	txn     *MvccTxn
+	iter    engine_util.DBIterator
 	lastKey []byte
 }
 
@@ -19,8 +19,8 @@ type Scanner struct {
 func NewScanner(startKey []byte, txn *MvccTxn) *Scanner {
 	// Your Code Here (4C).
 	scanner := &Scanner{
-		txn: txn,
-		iter: txn.Reader.IterCF(engine_util.CfWrite),
+		txn:     txn,
+		iter:    txn.Reader.IterCF(engine_util.CfWrite),
 		lastKey: startKey,
 	}
 	scanner.iter.Seek(EncodeKey(startKey, scanner.txn.StartTS))
@@ -35,13 +35,13 @@ func (scan *Scanner) Close() {
 // Next returns the next key/value pair from the scanner. If the scanner is exhausted, then it will return `nil, nil, nil`.
 func (scan *Scanner) Next() ([]byte, []byte, error) {
 	// Your Code Here (4C).
-	for scan.iter.Valid(){
+	for scan.iter.Valid() {
 		item := scan.iter.Item()
 		curr := item.Key()
 		if curr != nil {
 			key := DecodeUserKey(curr)
 			ts := decodeTimestamp(curr)
-			if ts < scan.txn.StartTS && !bytes.Equal(scan.lastKey, key){
+			if ts < scan.txn.StartTS && !bytes.Equal(scan.lastKey, key) {
 				value, _ := scan.txn.GetValue(key)
 				scan.lastKey = key
 				return key, value, nil
