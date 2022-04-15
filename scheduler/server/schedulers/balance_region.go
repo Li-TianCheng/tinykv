@@ -18,6 +18,7 @@ import (
 	"github.com/pingcap-incubator/tinykv/scheduler/server/schedule"
 	"github.com/pingcap-incubator/tinykv/scheduler/server/schedule/operator"
 	"github.com/pingcap-incubator/tinykv/scheduler/server/schedule/opt"
+	"sort"
 )
 
 func init() {
@@ -77,6 +78,69 @@ func (s *balanceRegionScheduler) IsScheduleAllowed(cluster opt.Cluster) bool {
 
 func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) *operator.Operator {
 	// Your Code Here (3C).
-
-	return nil
+	stores := cluster.GetStores()
+	suitableStores := make([]*core.StoreInfo, 0)
+	for _, store := range stores {
+		if store.IsUp() && store.DownTime() <= cluster.GetMaxStoreDownTime() {
+			suitableStores = append(suitableStores, store)
+		}
+	}
+	if len(suitableStores) <= 1 {
+		return nil
+	}
+	sort.Slice(suitableStores, func(i, j int) bool {
+		return suitableStores[i].GetRegionSize() > suitableStores[j].GetRegionSize()
+	})
+	var regionInfo *core.RegionInfo
+	var src *core.StoreInfo
+	for _, store := range suitableStores {
+		src = store
+		cluster.GetPendingRegionsWithLock(store.GetID(), func(regions core.RegionsContainer) {
+			regionInfo = regions.RandomRegion(nil, nil)
+		})
+		if regionInfo != nil {
+			break
+		}
+		cluster.GetFollowersWithLock(store.GetID(), func(regions core.RegionsContainer) {
+			regionInfo = regions.RandomRegion(nil, nil)
+		})
+		if regionInfo != nil {
+			break
+		}
+		cluster.GetLeadersWithLock(store.GetID(), func(regions core.RegionsContainer) {
+			regionInfo = regions.RandomRegion(nil, nil)
+		})
+		if regionInfo != nil {
+			break
+		}
+	}
+	if regionInfo == nil {
+		return nil
+	}
+	storeIds := regionInfo.GetStoreIds()
+	if len(storeIds) < cluster.GetMaxReplicas() {
+		return nil
+	}
+	var dst *core.StoreInfo
+	for _, store := range suitableStores {
+		if _, ok := storeIds[store.GetID()]; !ok {
+			dst = store
+		}
+	}
+	if dst == nil {
+		return nil
+	}
+	if src.GetRegionSize()-dst.GetRegionSize() <= 2*regionInfo.GetApproximateSize() {
+		return nil
+	}
+	newPeer, err := cluster.AllocPeer(dst.GetID())
+	if err != nil {
+		return nil
+	}
+	op, err := operator.CreateMovePeerOperator("balance-region", cluster,
+		regionInfo, operator.OpBalance, src.GetID(), dst.GetID(), newPeer.GetId())
+	if err != nil {
+		return nil
+	}
+	return op
 }
