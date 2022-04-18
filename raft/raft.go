@@ -660,21 +660,15 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			msg.Index = r.RaftLog.LastIndex()
 		} else {
 			msg.Reject = false
-			lastIndex := r.RaftLog.LastIndex()
 			for _, entry := range m.Entries {
-				if entry.Index <= lastIndex {
-					term, err := r.RaftLog.Term(entry.Index)
-					if err != nil {
-						msg.Index = r.RaftLog.LastIndex()
-						r.sendMsg(msg)
-						return
-					}
+				if entry.Index <= r.RaftLog.committed {
+					continue
+				}
+				if entry.Index <= r.RaftLog.LastIndex() {
+					term, _ := r.RaftLog.Term(entry.Index)
 					if term != entry.Term {
-						if len(r.RaftLog.entries) != 0 && entry.Index-r.RaftLog.FirstIndex() >= 0 {
-							r.RaftLog.entries = r.RaftLog.entries[:entry.Index-r.RaftLog.FirstIndex()]
-						}
+						r.RaftLog.entries = r.RaftLog.entries[:entry.Index-r.RaftLog.FirstIndex()]
 						r.RaftLog.entries = append(r.RaftLog.entries, *entry)
-						lastIndex = r.RaftLog.LastIndex()
 						r.RaftLog.stabled = m.Index
 					}
 				} else {
@@ -683,7 +677,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			}
 			if m.Commit > r.RaftLog.committed {
 				committed := min(m.Commit, m.Index+uint64(len(m.Entries)))
-				r.RaftLog.committed = min(committed, r.RaftLog.LastIndex())
+				r.RaftLog.committed = max(r.RaftLog.committed, min(committed, r.RaftLog.LastIndex()))
 			}
 			msg.Index = m.Index + uint64(len(m.Entries))
 		}
@@ -728,14 +722,13 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 			To:      m.From,
 		}
 		snap := m.Snapshot
-		if snap.Metadata.Index < r.RaftLog.committed {
+		if snap.Metadata.Index <= r.RaftLog.committed {
 			msg.Reject = true
 			msg.Index = r.RaftLog.LastIndex()
 		} else {
-			r.RaftLog.applied = snap.Metadata.Index
-			r.RaftLog.committed = snap.Metadata.Index
-			r.RaftLog.stabled = snap.Metadata.Index
-			r.RaftLog.maybeCompact()
+			r.RaftLog.applied = max(r.RaftLog.applied, snap.Metadata.Index)
+			r.RaftLog.committed = max(r.RaftLog.committed, snap.Metadata.Index)
+			r.RaftLog.stabled = max(r.RaftLog.stabled, snap.Metadata.Index)
 			r.RaftLog.pendingSnapshot = snap
 			msg.Reject = false
 			msg.Index = snap.Metadata.Index
