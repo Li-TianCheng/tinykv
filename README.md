@@ -1,97 +1,30 @@
-# The TinyKV Course
-
-The TinyKV course builds a key-value storage system with the Raft consensus algorithm. It is inspired by [MIT 6.824](https://pdos.csail.mit.edu/6.824/) and [TiKV Project](https://github.com/tikv/tikv).
-
-After completing this course, you will have the knowledge to implement a horizontally scalable, highly available, key-value storage service with distributed transaction support. Also, you will have a better understanding of TiKV architecture and implementation.
-
-## Course Architecture
-
-The whole project is a skeleton code for a key-value server and a scheduler server at the beginning - you need to finish the core logic step by step:
-
-* [Standalone KV](doc/project1-StandaloneKV.md)
-  * Implement a standalone storage engine.
-  * Implement raw key-value service handlers.
-* [Raft KV](doc/project2-RaftKV.md)
-  * Implement the basic Raft algorithm.
-  * Build a fault-tolerant KV server on top of Raft.
-  * Add the support of Raft log garbage collection and snapshot.
-* [Multi-raft KV](doc/project3-MultiRaftKV.md)
-  * Implement membership change and leadership change to Raft algorithm.
-  * Implement conf change and region split on Raft store.
-  * Implement a basic scheduler.
-* [Transaction](doc/project4-Transaction.md)
-  * Implement the multi-version concurrency control layer.
-  * Implement handlers of `KvGet`, `KvPrewrite`, and `KvCommit` requests.
-  * Implement handlers of `KvScan`, `KvCheckTxnStatus`, `KvBatchRollback`, and `KvResolveLock` requests.
-
-## Code Structure
-
-![overview](doc/imgs/overview.png)
-
-Similar to the architecture of TiDB + TiKV + PD that separates the storage and computation, TinyKV only focuses on the storage layer of a distributed database system. If you are also interested in the SQL layer, please see [TinySQL](https://github.com/tidb-incubator/tinysql). Besides that, there is a component called TinyScheduler acting as a center control of the whole TinyKV cluster, which collects information from the heartbeats of TinyKV. After that, the TinyScheduler can generate scheduling tasks and distribute the tasks to the TinyKV instances. All of instances are communicated via RPC.
-
-The whole project is organized into the following directories:
-
-* `kv` contains the implementation of the key-value store.
-* `raft` contains the implementation of the Raft consensus algorithm.
-* `scheduler` contains the implementation of the TinyScheduler, which is responsible for managing TinyKV nodes and generating timestamps.
-* `proto` contains the implementation of all communication between nodes and processes uses Protocol Buffers over gRPC. This package contains the protocol definitions used by TinyKV, and the generated Go code that you can use.
-* `log` contains utility to output log based on level.
-
-## Reading List
-
-We provide a [reading list](doc/reading_list.md) for the knowledge of distributed storage system. Though not all of them are highly related with this course, they can help you construct the knowledge system in this field.
-
-Also, you're encouraged to read the overview of TiKV's and PD's design to get a general impression on what you will build:
-
-* TiKV, the design of data storage ([English](https://en.pingcap.com/blog/tidb-internal-data-storage), [Chinese](https://pingcap.com/zh/blog/tidb-internal-1)).
-* PD, the design of scheduling ([English](https://en.pingcap.com/blog/tidb-internal-scheduling), [Chinese](https://pingcap.com/zh/blog/tidb-internal-3)).
-
-## Build TinyKV from Source
-
-### Prerequisites
-
-* `git`: The source code of TinyKV is hosted on GitHub as a git repository. To work with git repository, please [install `git`](https://git-scm.com/downloads).
-* `go`: TinyKV is a Go project. To build TinyKV from source, please [install `go`](https://golang.org/doc/install) with version greater or equal to 1.13.
-
-### Clone
-
-Clone the source code to your development machine.
-
-```bash
-git clone https://github.com/tidb-incubator/tinykv.git
-```
-
-### Build
-
-Build TiDB from the source code.
-
-```bash
-cd tinykv
-make
-```
-
-It builds the binary of `tinykv-server` and `tinyscheduler-server` to `bin` dir.
-
-## Run TinyKV with TinySQL
-
-1. Get `tinysql-server` follow [its document](https://github.com/tidb-incubator/tinysql#deploy).
-2. Put the binary of `tinyscheduler-server`, `tinykv-server` and `tinysql-server` into a single dir.
-3. Under the binary dir, run the following commands:
-
-```bash
-mkdir -p data
-./tinyscheduler-server
-./tinykv-server -path=data
-./tinysql-server --store=tikv --path="127.0.0.1:2379"
-```
-
-Now you can connect to the database with an official MySQL client:
-
-```bash
-mysql -u root -h 127.0.0.1 -P 4000
-```
-
-## Contributing
-
-Any feedback and contribution is greatly appreciated. Please see [issues](https://github.com/tidb-incubator/tinykv/issues) if you want to join in the development.
+# 整体结构
+![](https://github.com/Li-TianCheng/tinykv/blob/main/doc/imgs/%E6%95%B4%E4%BD%93%E7%BB%93%E6%9E%84.png)
+## raftStorage
+* raftStorage中interface注册到grpcServer中,详见```tinykvpb.RegisterTinyKvServer```
+* 网络消息通过grpcServer路由,分别调用Raft(),Snapshot()接口
+* snap worker负责snapshot的发送和接收,当snapshot接收完毕后,将SendRaftMessage到下层的raftStore进行处理
+* resolve worker负责解析消息地址
+* Raft()接口将SendRaftMessage到下层的raftStore进行处理
+* Snapshot()接口将向snap worker发送一个recvSnapTask,对snapshot进行异步接收
+## node
+* node是对raftStore的封装,并添加了一些其他信息
+## raftStore
+* tick driver负责定时发送MsgTypeTick消息驱动raft
+* split check worker负责检测是否需要split
+* raft log gc worker负责接收RaftLogGCTask,并对日志进行清理
+* region worker负责异步生成snapshot,以及snapshot的应用
+* scheduler worker负责与Scheduler进行交换
+* store worker负责生成新的peer
+* raft worker负责处理从上层接收到的消息
+* 上层raftStorage将消息通过router路由到相应的peer,如果peer不存在,则发送消息到store worker来生成相应peer,否则发送消息到raft worker进行处理
+* raft worker收到消息,生成相应的peerMsgHandler对消息进行处理,并驱动下层RawNode
+* peerMsgHandler对RawNode的Ready进行相应处理,持久化到raftDB和kvDB中,并将消息发送(如果是snapshot则向snap worker发送sendSnapTask)
+* raftDB中保存raft log以及RaftLocalState(hard state(Term,Vote,Commit),LastIndex,LastTerm)
+* kvDB中保存kv数据,RegionLocalState以及RaftApplyState(AppliedIndex,RaftTruncatedState)
+# Raft算法层
+![](https://github.com/Li-TianCheng/tinykv/blob/main/doc/imgs/raft.png)
+* RawNode为上层peerMsgHandler提供几个调用接口
+* RawNode利用Ready向上层peerMsgHandler传递信息,peerMsgHandler拿到Ready后负责对消息的发送及log的持久化等操作
+* RawNode被上层调用后,调用Raft的Step()来向Raft传递消息,驱动Raft
+* Raft拿到消息后,进行处理,并更新状态,以及RaftLog
