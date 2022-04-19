@@ -726,6 +726,11 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 			msg.Reject = true
 			msg.Index = r.RaftLog.LastIndex()
 		} else {
+			if r.RaftLog.LastIndex() <= snap.Metadata.Index {
+				r.RaftLog.entries = r.RaftLog.entries[0:0]
+			} else if r.RaftLog.FirstIndex() <= snap.Metadata.Index {
+				r.RaftLog.entries = r.RaftLog.entries[snap.Metadata.Index-r.RaftLog.FirstIndex()+1:]
+			}
 			r.RaftLog.applied = max(r.RaftLog.applied, snap.Metadata.Index)
 			r.RaftLog.committed = max(r.RaftLog.committed, snap.Metadata.Index)
 			r.RaftLog.stabled = max(r.RaftLog.stabled, snap.Metadata.Index)

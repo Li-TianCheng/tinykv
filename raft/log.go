@@ -61,7 +61,10 @@ func newLog(storage Storage) *RaftLog {
 	firstIndex, _ := storage.FirstIndex()
 	lastIndex, _ := storage.LastIndex()
 	hardState, _, _ := storage.InitialState()
-	entries, _ := storage.Entries(firstIndex, lastIndex+1)
+	entries, err := storage.Entries(firstIndex, lastIndex+1)
+	if err != nil {
+		panic(err)
+	}
 	log := &RaftLog{
 		storage:         storage,
 		committed:       hardState.Commit,
@@ -113,7 +116,11 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
 	if len(l.entries) == 0 {
-		return l.stabled
+		if !IsEmptySnap(l.pendingSnapshot) {
+			return l.pendingSnapshot.Metadata.Index
+		}
+		lastIndex, _ := l.storage.LastIndex()
+		return lastIndex
 	}
 	return l.entries[len(l.entries)-1].Index
 }
@@ -129,19 +136,21 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 			return l.entries[i-l.FirstIndex()].Term, nil
 		}
 	}
-	term, err := l.storage.Term(i)
-	if err == ErrUnavailable && !IsEmptySnap(l.pendingSnapshot) {
-		if i < l.pendingSnapshot.Metadata.Index {
-			err = ErrCompacted
-		} else {
+	if !IsEmptySnap(l.pendingSnapshot) {
+		if i == l.pendingSnapshot.Metadata.Index {
 			return l.pendingSnapshot.Metadata.Term, nil
+		} else {
+			return 0, ErrCompacted
 		}
 	}
-	return term, err
+	return l.storage.Term(i)
 }
 
 func (l *RaftLog) FirstIndex() uint64 {
 	if len(l.entries) == 0 {
+		if !IsEmptySnap(l.pendingSnapshot) {
+			return l.pendingSnapshot.Metadata.Index
+		}
 		i, _ := l.storage.FirstIndex()
 		return i - 1
 	}

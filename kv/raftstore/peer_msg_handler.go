@@ -189,10 +189,13 @@ func (d *peerMsgHandler) applyAdminRequest(msg *raft_cmdpb.RaftCmdRequest, wb *e
 		if compactLog.CompactIndex > d.peerStorage.applyState.TruncatedState.Index {
 			d.peerStorage.applyState.TruncatedState.Index = compactLog.CompactIndex
 			d.peerStorage.applyState.TruncatedState.Term = compactLog.CompactTerm
+			wb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+			wb.MustWriteToDB(d.peerStorage.Engines.Kv)
 			d.ScheduleCompactLog(compactLog.CompactIndex)
+		} else {
+			wb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+			wb.MustWriteToDB(d.peerStorage.Engines.Kv)
 		}
-		wb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
-		wb.MustWriteToDB(d.peerStorage.Engines.Kv)
 	case raft_cmdpb.AdminCmdType_TransferLeader:
 	case raft_cmdpb.AdminCmdType_Split:
 		d.Region().RegionEpoch.Version++

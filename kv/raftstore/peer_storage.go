@@ -334,6 +334,8 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	for i := entries[len(entries)-1].Index + 1; i <= lastIndex; i++ {
 		raftWB.DeleteMeta(meta.RaftLogKey(ps.region.Id, i))
 	}
+	ps.raftState.LastIndex = entries[len(entries)-1].Index
+	ps.raftState.LastTerm = entries[len(entries)-1].Term
 	return nil
 }
 
@@ -403,12 +405,6 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	err = ps.Append(ready.Entries, writeBatch)
 	if !raft.IsEmptyHardState(ready.HardState) {
 		ps.raftState.HardState = &ready.HardState
-	}
-	if len(ready.Entries) > 0 {
-		if ready.Entries[len(ready.Entries)-1].Index > ps.raftState.LastIndex {
-			ps.raftState.LastIndex = ready.Entries[len(ready.Entries)-1].Index
-			ps.raftState.LastTerm = ready.Entries[len(ready.Entries)-1].Term
-		}
 	}
 	writeBatch.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState)
 	writeBatch.MustWriteToDB(ps.Engines.Raft)
