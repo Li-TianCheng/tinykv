@@ -82,12 +82,9 @@ func newLog(storage Storage) *RaftLog {
 func (l *RaftLog) maybeCompact() {
 	// Your Code Here (2C).
 	if len(l.entries) > 0 {
-		if l.FirstIndex() > l.entries[0].Index {
-			if l.FirstIndex() > l.LastIndex() {
-				l.entries = l.entries[0:0]
-			} else {
-				l.entries = l.entries[l.FirstIndex()-l.entries[0].Index:]
-			}
+		truncatedIndex, _ := l.storage.FirstIndex()
+		if truncatedIndex > l.entries[0].Index {
+			l.entries = l.entries[truncatedIndex-l.entries[0].Index:]
 		}
 	}
 }
